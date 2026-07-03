@@ -353,10 +353,14 @@ Main evaluation uses Qwen2.5-Coder-3B-Instruct with greedy decoding. Preference 
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Base-OneShot | 57.56% | 57.56% | / | 84.01% | 83.43% |
 | Base + CM Repair | 57.56% | 68.90% | 26.71% | 81.64% | 81.20% |
+| SFT-OneShot | 61.92% | 61.92% | / | 82.72% | 82.54% |
+| SFT + CM Repair | 61.92% | 71.41% | 24.94% | 82.72% | 82.54% |
+| DPO-Synth20-OneShot | 62.11% | 62.11% | / | 82.37% | 82.02% |
+| DPO-Synth20 + CM Repair | 62.11% | 71.80% | 25.58% | 82.37% | 82.02% |
 | SFT+DPO-OneShot | 67.25% | 67.25% | / | 84.94% | 84.45% |
 | SFT+DPO + CM Repair | 67.25% | 73.55% | 19.23% | 84.94% | 84.45% |
 
-SFT+DPO gives the best clean-split result. SFT improves supervised SQL generation, DPO further aligns chosen/rejected SQL preferences, and CM Repair adds verified-failure correction on top. The final DPO stage uses a synthetic-ratio-controlled DPO set with 701 filtered pairs: 557 natural rollout pairs and 144 synthetic hard negatives.
+SFT and DPO both improve first-turn SQL generation over the base model, while CM Repair adds verified-failure correction on top. SFT+DPO gives the best clean-split result, suggesting that supervised SQL imitation and execution-guided preference optimization are complementary in this setting. The final DPO stage uses a synthetic-ratio-controlled DPO set with 701 filtered pairs: 557 natural rollout pairs and 144 synthetic hard negatives.
 
 ### Verified-Failure Setting
 
