@@ -463,17 +463,6 @@ The following Spider dev 200 results were used during development to compare fee
 
 This early Spider 200 ablation was used for rapid iteration. In the final train1000 -> dev full clean-split setting, the cleaner SFT data and completion-only training no longer show the same first-turn regression; SFT+DPO achieves the best first-turn and final execution accuracy.
 
-## Resume Bullet
-
-**基于执行反馈与偏好优化的 Retrieved-Schema Text-to-SQL Agent 后训练流水线**
-
-- 构建 retrieved-schema Text-to-SQL 后训练流水线，将 one-shot SQL 生成改造为“schema 检索 -> SQL 生成 -> SQLite 沙盒执行/校验 -> Column-Minimal Repair -> LoRA SFT/DPO 训练与评估”的闭环系统。
-- 设计 execution-guided preference mining 流程，从模型真实 rollout 轨迹中自动构造 DPO 偏好对：在同一初始 prompt 下构造 first-turn correct-vs-failed pairs，在同一修复 prompt 下构造 repair success-vs-failed pairs，并补充 gold fallback 与 wrong column / missing join / wrong aggregation 等 synthetic hard negatives。
-- 构建 DPO Pair Quality Dashboard，统计 reward margin、SQL edit-distance、duplicate rate、pair-type distribution、chosen executable rate 与 hard-negative ratio；通过 reward-margin filtering、SQL edit-distance filtering、pair-type balancing 与 synthetic ratio control 降低弱偏好和分布偏移。
-- 设计 verifier-aware error routing，将首轮失败 SQL 按 executor-visible errors、guarded errors 与 external-verifier semantic errors 分流，明确区分 online repair 与 offline verified-failure repair upper bound。
-- 在 Qwen2.5-Coder-3B-Instruct + Spider dev full 1034 上完成 clean-split 验证：SFT+DPO 将 First-turn EX 从 57.56% 提升至 67.25%；结合 Column-Minimal Repair 后 Final EX 达到 73.55%，相对 Base-OneShot 提升 +15.99 pp；方法消融显示 SFT 与 DPO 互补，SFT+DPO 在首轮生成和最终执行准确率上均取得最优结果。
-- 进行 schema retrieval 消融与错误归因分析，发现不同 schema retrieval 策略结果接近，top-k=6 下 schema recall 已基本饱和，主要瓶颈转向 table-column ownership、join reasoning 与 result grounding。
-
 ## Key Findings
 
 Schema retrieval was not the main limiter on the Spider 200 slice: `retrieved`, `bm25`, and `bm25_fk` all reached 100% gold-table recall with the same selected table sets. Error analysis instead showed that `no_such_column` failures mostly came from wrong column owners, alias/table-column mapping errors, and extra joins that changed alias bindings.
