@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+data/demo/database/
+data/demo/*.jsonl
+outputs/
+
+checkpoint-*/
+adapter/
