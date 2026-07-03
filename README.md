@@ -452,6 +452,17 @@ The final clean-split ablation shows that SFT and DPO are complementary in the c
 | DPO + CM Repair | 62.11% | 71.80% | 25.58% | 82.02% |
 | SFT+DPO + CM Repair | 67.25% | 73.55% | 19.23% | 84.45% |
 
+### Repair Feedback Ablation
+
+Basic Repair uses SQLite error/result-status feedback. CM Repair adds column-aware diagnostics, alias-table binding, candidate column owners, available columns, and the minimal-SQL repair constraint. On Spider dev full, CM Repair improves both the base model and the post-trained SFT+DPO model.
+
+| Run | First-turn EX | Final EX | Repair SR | Executable |
+| --- | ---: | ---: | ---: | ---: |
+| Base + Basic Repair | 57.56% | 61.43% | 9.13% | 75.89% |
+| Base + CM Repair | 57.56% | 68.90% | 26.71% | 81.20% |
+| SFT+DPO + Basic Repair | 67.25% | 71.12% | 11.83% | 81.37% |
+| SFT+DPO + CM Repair | 67.25% | 73.55% | 19.23% | 84.45% |
+
 ### Feedback And DPO Ablation
 
 The following Spider dev 200 results were used during development to compare feedback variants.
