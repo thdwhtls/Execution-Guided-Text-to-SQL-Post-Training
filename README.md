@@ -1,6 +1,8 @@
 # Execution-Guided Text-to-SQL Post-Training
 
-This project builds a short-horizon Text-to-SQL post-training pipeline that turns one-shot SQL generation into an environment interaction task:
+This project implements an execution-guided Text-to-SQL post-training and verification system on Spider. It uses Qwen2.5-Coder-3B-Instruct as the base model, mines preference data from Spider `train_spider.json`, and evaluates on the full Spider dev split of 1034 examples without using dev examples for training or DPO pair construction.
+
+The core idea is to model Text-to-SQL as a verifier-backed training loop rather than a single prompt:
 
 1. Generate SQL from `question + retrieved schema`.
 2. Execute the SQL inside a read-only SQLite sandbox.
@@ -8,7 +10,7 @@ This project builds a short-horizon Text-to-SQL post-training pipeline that turn
 4. Mine preference pairs from successful repairs.
 5. Train with LoRA SFT or DPO.
 
-The pipeline writes trajectories, GRPO-style rollout records, DPO pairs, and reward/metric summaries.
+The main experiments focus on LoRA SFT/DPO, pair-quality filtering, Column-Minimal Repair, and clean-split error analysis. The pipeline also exports rollout records that can be reused for future RL-style training, but GRPO training is not part of the current reported results.
 
 ## Pipeline Overview
 
@@ -18,14 +20,14 @@ flowchart TD
     B --> C["SQLite Sandbox Execution"]
     C --> D["Error / Result Feedback"]
     D --> E["Column-Minimal Repair Rollout"]
-    E --> F["DPO Pair Mining / GRPO Rollout Export"]
+    E --> F["DPO Pair Mining / Rollout Export"]
     F --> G["LoRA SFT / DPO"]
     G --> H["Evaluation + Error Analysis"]
 ```
 
 ## Core Contributions
 
-- **Execution-Guided Self-Repair**: turns one-shot SQL generation into a short-horizon environment interaction task: generate SQL, execute it, read feedback, then repair.
+- **Execution-Guided Self-Repair**: turns one-shot SQL generation into a verifier-backed interaction task: generate SQL, execute it, read feedback, then repair.
 - **Column-Minimal Repair Feedback**: diagnoses invalid columns, alias ownership, candidate owner tables, available schema columns, and asks the model to remove unnecessary joins when a minimal SQL is enough.
 - **Preference Mining for DPO**: mines same-prompt first-turn pairs, same-feedback repair pairs, gold fallback pairs, and synthetic hard negatives from execution-verified rollouts.
 - **DPO Pair Quality Dashboard**: reports reward margin, SQL edit distance, duplicate rate, pair-type distribution, chosen executable rate, and hard-negative ratio before/after filtering.
@@ -47,6 +49,7 @@ flowchart TD
   - `chosen`: repaired SQL that executes to the gold result, or gold SQL when enabled.
   - `rejected`: first-turn wrong SQL.
   - If a repair turn samples both correct and failed repairs under the same `question + schema + previous SQL + execution feedback` prompt, the pipeline prefers a cleaner `repair_correct_vs_repair_failed` pair.
+  - Gold fallback is used only to create a `chosen` completion for failed training pairs; it is not counted as a model prediction in evaluation metrics.
 - Preference-pair filtering and balancing:
   - per-input and per-pair-type caps to prevent synthetic pairs from dominating.
   - optional reward-margin filtering with `--min_reward_margin`.
@@ -68,9 +71,9 @@ flowchart TD
 
 When `--num_samples > 1`, example-level metrics answer "did this question get at least one correct SQL?", while candidate-level metrics answer "what fraction of generated SQL candidates were correct?".
 
-## Quick Smoke Test
+## Optional Local Smoke Test
 
-Run the entire mock pipeline with one command. This does not require a local LLM and is intended for smoke testing the full data path:
+For fast local verification, the repository includes a tiny SQLite dataset and a mock generator. This path is only a smoke test for the data flow; the reported results below use Qwen2.5-Coder-3B-Instruct on Spider.
 
 ```bash
 python3 scripts/run_demo_pipeline.py
@@ -84,7 +87,7 @@ Create a tiny Spider-style demo database:
 python3 scripts/make_demo_dataset.py
 ```
 
-Run a no-download mock rollout. The mock generator intentionally emits a bad first SQL and then repairs to the gold SQL, so the full execution-feedback and DPO construction path is exercised:
+Run a no-download mock rollout. The mock generator intentionally emits a bad first SQL and then repairs to the gold SQL, so the execution-feedback and DPO-construction code path is exercised:
 
 ```bash
 python3 text2sql_trajectory_builder.py \
@@ -136,7 +139,7 @@ bash experiments/06_compare.sh
 
 Small artifacts can be copied into `outputs_key/`, while large trajectories, adapters, and raw rollouts should stay in `outputs/` or external storage.
 
-## Day 1: Baseline Evaluation
+## Baseline Evaluation
 
 For a real local model:
 
@@ -212,7 +215,7 @@ python3 text2sql_trajectory_builder.py \
   --max_turns 3
 ```
 
-## Day 2: Self-Repair Rollouts And DPO Mining
+## Self-Repair Rollouts And DPO Mining
 
 ```bash
 python3 text2sql_trajectory_builder.py \
@@ -232,7 +235,7 @@ Important outputs:
 
 - `trajectories.jsonl`: per-example SQL attempts, execution status, errors, rewards.
 - `dpo_pairs.json`: prompt/chosen/rejected triples.
-- `grpo_rollouts.jsonl`: prompt, completions, and scalar rewards.
+- `grpo_rollouts.jsonl`: prompt, completions, and scalar rewards exported for future RL-style extensions.
 
 When `--num_samples > 1`, repair turns can produce same-prompt repair-policy DPO pairs:
 
@@ -261,7 +264,7 @@ python3 text2sql_trajectory_builder.py \
   --use_gold_when_failed
 ```
 
-## Day 3: LoRA SFT Or DPO
+## LoRA SFT Or DPO
 
 Install training dependencies:
 
@@ -345,6 +348,8 @@ For Spider layout, the script searches:
 Column-Minimal Repair (CM Repair) means column-aware execution feedback plus the minimal-SQL repair constraint implemented by `--feedback_detail minimal`.
 
 Main evaluation uses Qwen2.5-Coder-3B-Instruct with greedy decoding. Preference data is mined from Spider `train_spider.json`; Spider dev full 1034 examples are used only for final clean-split evaluation.
+
+`--use_gold_when_failed` affects DPO pair construction only: when all model attempts fail, gold SQL can be used as the chosen side of a preference pair. It does not change `first-turn EX` or `final EX`, which are computed only from model-generated SQL candidates.
 
 ### Clean-Split Main Results
 
