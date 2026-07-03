@@ -19,5 +19,4 @@ python3 text2sql_trajectory_builder.py \
   --top_k_tables 6 \
   --feedback_mode result_status \
   --feedback_detail minimal \
-  --use_gold_when_failed \
   --progress_every 50

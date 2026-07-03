@@ -12,6 +12,14 @@ The core idea is to model Text-to-SQL as a verifier-backed training loop rather 
 
 The main experiments focus on LoRA SFT/DPO, pair-quality filtering, Column-Minimal Repair, and clean-split error analysis. The pipeline also exports rollout records that can be reused for future RL-style training, but GRPO training is not part of the current reported results.
 
+## TL;DR
+
+- Base model: Qwen2.5-Coder-3B-Instruct.
+- Training data: Spider `train_spider.json`, with `TRAIN_LIMIT=1000` for preference mining.
+- Evaluation data: full Spider dev split, 1034 examples, clean split.
+- Best result: SFT+DPO + Column-Minimal Repair improves Final EX from 68.90% to 73.55% over Base + CM Repair.
+- Main contribution: execution-guided rollout -> preference mining -> LoRA SFT/DPO -> verifier-aware error analysis.
+
 ## Pipeline Overview
 
 ```mermaid
@@ -95,8 +103,7 @@ python3 text2sql_trajectory_builder.py \
   --db_root data/demo/database \
   --output_dir outputs/demo_mock \
   --generator mock \
-  --max_turns 3 \
-  --use_gold_when_failed
+  --max_turns 3
 ```
 
 Inspect:
@@ -172,8 +179,7 @@ python3 text2sql_trajectory_builder.py \
   --temperature 0 \
   --schema_mode bm25_fk \
   --top_k_tables 6 \
-  --fk_hops 1 \
-  --use_gold_when_failed
+  --fk_hops 1
 ```
 
 ### Recommended Local Base Models
@@ -219,8 +225,8 @@ python3 text2sql_trajectory_builder.py \
 
 ```bash
 python3 text2sql_trajectory_builder.py \
-  --dataset_path /path/to/spider/dev.json \
-  --db_root /path/to/spider/database \
+  --dataset_path "$SPIDER_ROOT/train_spider.json" \
+  --db_root "$SPIDER_ROOT/database" \
   --output_dir outputs/repair_rollouts \
   --generator hf \
   --model_path /path/to/model \
@@ -252,8 +258,8 @@ Column-aware repair feedback keeps the same rollout path but adds schema-grounde
 
 ```bash
 python3 text2sql_trajectory_builder.py \
-  --dataset_path /path/to/spider/dev.json \
-  --db_root /path/to/spider/database \
+  --dataset_path "$SPIDER_ROOT/train_spider.json" \
+  --db_root "$SPIDER_ROOT/database" \
   --output_dir outputs/repair_rollouts_column \
   --generator hf \
   --model_path /path/to/model \
@@ -309,7 +315,7 @@ python3 text2sql_trajectory_builder.py \
   --temperature 0 \
   --schema_mode retrieved \
   --top_k_tables 6 \
-  --use_gold_when_failed
+  --feedback_mode result_status
 ```
 
 ## Dataset Format

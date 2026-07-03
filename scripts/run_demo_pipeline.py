@@ -40,7 +40,6 @@ def main() -> None:
             "3",
             "--feedback_detail",
             "minimal",
-            "--use_gold_when_failed",
         ]
     )
 
