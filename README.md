@@ -355,12 +355,12 @@ Main evaluation uses Qwen2.5-Coder-3B-Instruct with greedy decoding. Preference 
 | Base + CM Repair | 57.56% | 68.90% | 26.71% | 81.64% | 81.20% |
 | SFT-OneShot | 61.92% | 61.92% | / | 82.72% | 82.54% |
 | SFT + CM Repair | 61.92% | 71.41% | 24.94% | 82.72% | 82.54% |
-| DPO-Synth20-OneShot | 62.11% | 62.11% | / | 82.37% | 82.02% |
-| DPO-Synth20 + CM Repair | 62.11% | 71.80% | 25.58% | 82.37% | 82.02% |
+| DPO-OneShot | 62.11% | 62.11% | / | 82.37% | 82.02% |
+| DPO + CM Repair | 62.11% | 71.80% | 25.58% | 82.37% | 82.02% |
 | SFT+DPO-OneShot | 67.25% | 67.25% | / | 84.94% | 84.45% |
 | SFT+DPO + CM Repair | 67.25% | 73.55% | 19.23% | 84.94% | 84.45% |
 
-SFT and DPO both improve first-turn SQL generation over the base model, while CM Repair adds verified-failure correction on top. SFT+DPO gives the best clean-split result, suggesting that supervised SQL imitation and execution-guided preference optimization are complementary in this setting. The final DPO stage uses a synthetic-ratio-controlled DPO set with 701 filtered pairs: 557 natural rollout pairs and 144 synthetic hard negatives.
+SFT and DPO both improve first-turn SQL generation over the base model, while CM Repair adds verified-failure correction on top. SFT+DPO gives the best clean-split result, suggesting that supervised SQL imitation and execution-guided preference optimization are complementary in this setting. DPO rows use the final synthetic-ratio-controlled Synth20 preference set with 701 filtered pairs: 557 natural rollout pairs and 144 synthetic hard negatives.
 
 ### Verified-Failure Setting
 
@@ -408,15 +408,26 @@ Final DPO data quality:
 
 ### Error-Type Repair Breakdown
 
-The selected Synth20 run reduces first-turn errors from 438 to 392 and increases final correct examples from 711 to 742 on Spider dev full. The detailed type-level breakdown below comes from the earlier DPO1000-Synth30 diagnostic run and shows the main error classes affected by DPO.
+The aligned Synth20 runs show that DPO reduces first-turn errors from 438 to 391 and increases final correct examples from 711 to 741. SFT+DPO further reduces first-turn errors to 338 and increases final correct examples to 759 on Spider dev full.
 
-| Error Type | Base First-turn Errors | Base Repaired | Base Repair Rate | DPO1000-Synth30 First-turn Errors | DPO1000-Synth30 Repaired | DPO1000-Synth30 Repair Rate |
+| Error Type | Base First-turn Errors | DPO First-turn Errors | SFT+DPO First-turn Errors | Base Repaired | DPO Repaired | SFT+DPO Repaired |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `wrong_result` | 223 | 55 | 24.66% | 199 | 39 | 19.60% |
-| `no_such_column` | 156 | 51 | 32.69% | 132 | 35 | 26.52% |
-| `empty_result` | 44 | 9 | 20.45% | 37 | 6 | 16.22% |
-| `no_such_table` | 9 | 1 | 11.11% | 9 | 1 | 11.11% |
-| `other_execution_error` | 6 | 1 | 16.67% | 3 | 1 | 33.33% |
+| `wrong_result` | 223 | 105 | 99 | 55 | 17 | 6 |
+| `wrong_row_count` | 0 | 92 | 90 | 0 | 30 | 24 |
+| `no_such_column` | 156 | 142 | 100 | 51 | 42 | 29 |
+| `empty_result` | 44 | 39 | 32 | 9 | 8 | 2 |
+| `no_such_table` | 9 | 9 | 9 | 1 | 2 | 2 |
+| `other_execution_error` | 6 | 4 | 6 | 1 | 1 | 2 |
+
+### Verifier-Aware Routing
+
+Verifier-aware routing separates executor-visible errors from guarded and external-verifier semantic failures. The aligned Synth20 runs show that SFT+DPO reduces both offline semantic failures and online-repairable schema/execution failures.
+
+| Deployment Scope | Base-CM | DPO-CM | SFT+DPO-CM |
+| --- | ---: | ---: | ---: |
+| online repair | 171 | 155 | 117 |
+| guarded repair | 44 | 39 | 32 |
+| offline or external-verifier repair | 223 | 197 | 189 |
 
 ### Synthetic Ratio Ablation
 
@@ -436,8 +447,8 @@ The final clean-split ablation shows that SFT and DPO are complementary in the c
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Base + CM Repair | 57.56% | 68.90% | 26.71% | 81.64% | 81.20% |
 | SFT + CM Repair | 61.92% | 71.41% | 24.94% | 82.72% | 82.54% |
-| DPO-Synth20 + CM Repair | 62.11% | 71.80% | 25.58% | 82.37% | 82.02% |
-| SFT+DPO-Synth20 + CM Repair | 67.25% | 73.55% | 19.23% | 84.94% | 84.45% |
+| DPO + CM Repair | 62.11% | 71.80% | 25.58% | 82.37% | 82.02% |
+| SFT+DPO + CM Repair | 67.25% | 73.55% | 19.23% | 84.94% | 84.45% |
 
 ### Feedback And DPO Ablation
 
