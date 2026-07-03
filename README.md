@@ -494,157 +494,70 @@ Balanced DPO improved overall SQL stability versus heavy synthetic DPO, but did 
 
 Scaling DPO data changes the preference distribution and may require retuning the natural/gold/synthetic mixture. In the train2000 scaling check, blindly increasing preference data shifted the model toward repair-oriented behavior and caused first-turn regression, suggesting that preference data quality, pair-type balance, and filtering are more important than raw pair count.
 
-## Next Experiments
+## Final Reproduction Commands
 
-Mine larger Spider preference data:
-
-```bash
-python3 text2sql_trajectory_builder.py \
-  --dataset_path "$SPIDER_ROOT/dev.json" \
-  --db_root "$SPIDER_ROOT/database" \
-  --output_dir outputs/spider_500_qwen25_coder_3b_samples4_mining \
-  --generator hf \
-  --model_path models/Qwen2.5-Coder-3B-Instruct \
-  --limit 500 \
-  --max_turns 3 \
-  --num_samples 4 \
-  --temperature 0.7 \
-  --top_p 0.9 \
-  --schema_mode retrieved \
-  --top_k_tables 6 \
-  --feedback_mode oracle_rows \
-  --use_gold_when_failed
-```
-
-Build synthetic erroneous SQL preference pairs:
+For the final train1000 -> Spider dev full setup, prefer the reproducible shell entry points in `experiments/` instead of the older ad-hoc commands used during development.
 
 ```bash
-python3 scripts/build_error_sql_samples.py \
-  --dataset_path "$SPIDER_ROOT/dev.json" \
-  --db_root "$SPIDER_ROOT/database" \
-  --output_dir outputs/spider_500_synthetic_errors \
-  --limit 500 \
-  --max_errors_per_example 4 \
-  --prefer_executable_wrong \
-  --max_schema_error_fraction 0.25 \
-  --schema_mode retrieved \
-  --top_k_tables 6
+bash experiments/00_make_demo.sh
+bash experiments/01_eval_base_oneshot.sh
+bash experiments/02_eval_base_repair.sh
+bash experiments/03_mine_dpo_pairs.sh
+bash experiments/04_train_dpo.sh
+bash experiments/05_eval_dpo_repair.sh
+bash experiments/06_compare.sh
 ```
 
-Merge natural rollout pairs with a bounded number of synthetic pairs. This keeps synthetic errors from dominating DPO and hurting one-shot SQL stability:
+The final DPO data is built from Spider `train_spider.json` with `TRAIN_LIMIT=1000`, then merged with synthetic hard negatives using Synth20 filtering:
 
 ```bash
 python3 scripts/merge_dpo_pairs.py \
   --inputs \
-    outputs/spider_500_qwen25_coder_3b_samples4_mining/dpo_pairs.json \
-    outputs/spider_500_synthetic_errors/dpo_pairs.json \
-  --output outputs/spider_500_balanced_dpo_pairs.json \
-  --input_limits 1=150 \
-  --shuffle
-```
-
-Optionally filter weak or overly broad preference pairs. Reward-margin filtering removes weak preferences; SQL edit-distance filtering keeps chosen/rejected SQL close enough to teach repair rather than unrelated style changes:
-
-```bash
-python3 scripts/merge_dpo_pairs.py \
-  --inputs \
-    outputs/spider_500_qwen25_coder_3b_samples4_mining/dpo_pairs.json \
-    outputs/spider_500_synthetic_errors/dpo_pairs.json \
-  --output outputs/spider_500_balanced_filtered_dpo_pairs.json \
-  --input_fraction_limits 1=0.25 \
-  --pair_type_max_fractions gold_vs_failed_attempt=0.2 \
+    outputs/train1000_rollout_qwen25_coder_3b/dpo_pairs.json \
+    outputs/train1000_synthetic_errors/dpo_pairs.json \
+  --output outputs/train1000_filtered_synth20_dpo_pairs.json \
+  --input_fraction_limits 1=0.20 \
+  --pair_type_max_fractions gold_vs_failed_attempt=0.20 \
   --min_reward_margin 0.3 \
   --max_sql_edit_distance_ratio 1.0 \
   --shuffle
 ```
 
-For tighter control, cap each synthetic error type:
-
-```bash
-python3 scripts/merge_dpo_pairs.py \
-  --inputs \
-    outputs/spider_500_qwen25_coder_3b_samples4_mining/dpo_pairs.json \
-    outputs/spider_500_synthetic_errors/dpo_pairs.json \
-  --output outputs/spider_500_balanced_dpo_pairs.json \
-  --pair_type_limits \
-    synthetic_wrong_table=30 \
-    synthetic_wrong_column=30 \
-    synthetic_missing_join=30 \
-    synthetic_wrong_aggregation=30 \
-    synthetic_wrong_condition=30 \
-    synthetic_wrong_group_by=30 \
-    synthetic_wrong_order_limit=30 \
-  --shuffle
-```
-
-Compare runs as a Markdown table:
+Regenerate final comparison and attribution reports after aligned evaluations:
 
 ```bash
 python3 analysis/compare_runs.py \
-  outputs/spider_200_base_oneshot/summary.json \
-  outputs/spider_200_base_repair/summary.json \
-  outputs/spider_200_dpo500_oneshot/summary.json \
-  outputs/spider_200_dpo500_repair/summary.json \
-  --labels Base-OneShot Base-Repair DPO500-OneShot DPO500-Repair \
-  --output outputs/reports/spider200_dpo500_compare.md
-```
+  outputs/devfull_base_repair_minimal/summary.json \
+  outputs/devfull_sft_repair_minimal/summary.json \
+  outputs/devfull_dpo_synth20_repair_cm_final/summary.json \
+  outputs/devfull_sft_dpo_synth20_repair_cm_final/summary.json \
+  --labels Base-CM SFT-CM DPO-CM SFT+DPO-CM \
+  --output outputs/reports/devfull_final_method_ablation_aligned.md
 
-Generate an error analysis report:
-
-```bash
-python3 analysis/error_report.py \
-  --trajectories outputs/spider_200_qwen25_coder_3b_dpo_greedy_repair/trajectories.jsonl \
-  --output_json outputs/reports/dpo_repair_error_report.json \
-  --output_md outputs/reports/dpo_repair_error_report.md
-```
-
-Generate an error-type repair breakdown for attribution:
-
-```bash
 python3 analysis/repair_breakdown.py \
   --runs \
     Base-CM=outputs/devfull_base_repair_minimal/trajectories.jsonl \
-    FilteredDPO-CM=outputs/devfull_dpo_train1000_filtered_repair_minimal/trajectories.jsonl \
-  --output_json outputs/reports/devfull_repair_breakdown.json \
-  --output_md outputs/reports/devfull_repair_breakdown.md
-```
+    DPO-CM=outputs/devfull_dpo_synth20_repair_cm_final/trajectories.jsonl \
+    SFT+DPO-CM=outputs/devfull_sft_dpo_synth20_repair_cm_final/trajectories.jsonl \
+  --output_json outputs/reports/devfull_synth20_repair_breakdown.json \
+  --output_md outputs/reports/devfull_synth20_repair_breakdown.md
 
-Generate a verifier-aware repair routing report:
-
-```bash
 python3 analysis/repair_routing_report.py \
   --runs \
     Base-CM=outputs/devfull_base_repair_minimal/trajectories.jsonl \
-    FilteredDPO-CM=outputs/devfull_dpo_train1000_filtered_repair_minimal/trajectories.jsonl \
-  --output_json outputs/reports/devfull_repair_routing.json \
-  --output_md outputs/reports/devfull_repair_routing.md
+    DPO-CM=outputs/devfull_dpo_synth20_repair_cm_final/trajectories.jsonl \
+    SFT+DPO-CM=outputs/devfull_sft_dpo_synth20_repair_cm_final/trajectories.jsonl \
+  --output_json outputs/reports/devfull_synth20_repair_routing.json \
+  --output_md outputs/reports/devfull_synth20_repair_routing.md
 ```
 
-Compare raw and filtered DPO pair quality:
+For pair quality diagnostics:
 
 ```bash
 python3 analysis/pair_quality_report.py \
   --datasets \
     Raw=outputs/train1000_raw_dpo_pairs.json \
-    Filtered=outputs/train1000_filtered_dpo_pairs.json \
+    Synth20=outputs/train1000_filtered_synth20_dpo_pairs.json \
   --output_json outputs/reports/train1000_pair_quality.json \
   --output_md outputs/reports/train1000_pair_quality.md
-```
-
-Run SFT then continue with DPO:
-
-```bash
-python3 training/train_lora_sft.py \
-  --model_name_or_path models/Qwen2.5-Coder-3B-Instruct \
-  --trajectories outputs/spider_500_qwen25_coder_3b_samples4_mining/trajectories.jsonl \
-  --dpo_pairs outputs/spider_500_qwen25_coder_3b_samples4_mining/dpo_pairs.json \
-  --output_dir outputs/sft_qwen25_coder_3b_spider500 \
-  --bf16
-
-python3 training/train_lora_dpo.py \
-  --model_name_or_path models/Qwen2.5-Coder-3B-Instruct \
-  --base_adapter_path outputs/sft_qwen25_coder_3b_spider500/adapter \
-  --dpo_pairs outputs/spider_500_qwen25_coder_3b_samples4_mining/dpo_pairs.json \
-  --output_dir outputs/sft_dpo_qwen25_coder_3b_spider500 \
-  --bf16
 ```
