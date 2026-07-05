@@ -48,6 +48,10 @@ flowchart TD
 - SQLite read-only execution sandbox with timeout.
 - Baseline one-shot mode via `--max_turns 1`.
 - Multi-turn self-repair rollout: `SQL -> execute -> feedback -> revised SQL`.
+- Repair scope switch:
+  - `--repair_scope verified`: repair every verifier-caught failure; used for offline verified-failure analysis and DPO mining.
+  - `--repair_scope online`: repair only executor-visible failures such as syntax/schema/runtime errors.
+  - `--repair_scope online_guarded`: additionally allow weak online sanity warnings such as empty results, rule-guard failures, and Cartesian join risk.
 - Repair feedback detail switch:
   - `--feedback_detail basic`: legacy SQLite error/result-status feedback.
   - `--feedback_detail column`: column-aware diagnostics with invalid identifiers, alias/table ownership hints, selected-table columns, and row-count/sample mismatch details.
@@ -441,6 +445,25 @@ Verifier-aware routing separates executor-visible errors from guarded and extern
 | guarded repair | 44 | 39 | 32 |
 | offline or external-verifier repair | 223 | 197 | 189 |
 
+### Online-Repair-Only Evaluation
+
+The offline verified-failure setting can use a verifier to detect semantic mismatches, but a normal online system only sees executor-visible failures and weak result sanity warnings. For this reason, the code also supports an online-only evaluation mode:
+
+- allowed feedback: SQL syntax/runtime errors, `no such table`, `no such column`, ambiguous columns, timeout or permission errors.
+- guarded feedback: empty-result sanity warning, rule-guard failures, and Cartesian join risk from `EXPLAIN QUERY PLAN`.
+- disallowed feedback: gold SQL, gold execution rows, expected row count, or "your result differs from gold".
+
+Run online-only repair with `--repair_scope online_guarded --feedback_mode online_visible`, then summarize the strict online subset with `analysis/online_repair_report.py`.
+
+Online-only results on Spider dev full show that the system still works under this deployment-style constraint. Without gold mismatch feedback, SFT+DPO + Online-CM reaches 70.35% Final EX:
+
+| Run | First-turn EX | Final EX | Repaired | Failed | Online Repair SR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Base Online-CM | 57.56% | 63.18% | 58 | 380 | 13.24% |
+| SFT+DPO Online-CM | 67.25% | 70.35% | 32 | 306 | 9.47% |
+
+The lower repair success rate after SFT+DPO is expected: the model makes fewer first-turn errors, so the online-repairable pool becomes smaller. The main online gain comes from better first-turn SQL plus a smaller amount of executor-visible / guarded repair.
+
 ### Synthetic Ratio Ablation
 
 Synthetic hard negatives are useful but affect the first-turn / repair trade-off. Reducing the synthetic fraction from 29.95% to 20.54% preserves most first-turn gains while improving repair success and final execution accuracy.
@@ -560,6 +583,48 @@ python3 analysis/repair_routing_report.py \
     SFT+DPO-CM=outputs/devfull_sft_dpo_synth20_repair_cm_final/trajectories.jsonl \
   --output_json outputs/reports/devfull_synth20_repair_routing.json \
   --output_md outputs/reports/devfull_synth20_repair_routing.md
+```
+
+For online-repair-only evaluation, rerun repair with online-visible feedback only:
+
+```bash
+python3 text2sql_trajectory_builder.py \
+  --dataset_path "$SPIDER_ROOT/dev.json" \
+  --db_root "$SPIDER_ROOT/database" \
+  --output_dir outputs/devfull_base_online_repair_cm \
+  --generator hf \
+  --model_path models/Qwen2.5-Coder-3B-Instruct \
+  --max_turns 3 \
+  --num_samples 1 \
+  --temperature 0 \
+  --schema_mode retrieved \
+  --top_k_tables 6 \
+  --feedback_mode online_visible \
+  --feedback_detail minimal \
+  --repair_scope online_guarded
+
+python3 text2sql_trajectory_builder.py \
+  --dataset_path "$SPIDER_ROOT/dev.json" \
+  --db_root "$SPIDER_ROOT/database" \
+  --output_dir outputs/devfull_sft_dpo_online_repair_cm \
+  --generator hf \
+  --model_path models/Qwen2.5-Coder-3B-Instruct \
+  --adapter_path outputs/sft_dpo_train1000_synth20_qwen25_coder_3b/adapter \
+  --max_turns 3 \
+  --num_samples 1 \
+  --temperature 0 \
+  --schema_mode retrieved \
+  --top_k_tables 6 \
+  --feedback_mode online_visible \
+  --feedback_detail minimal \
+  --repair_scope online_guarded
+
+python3 analysis/online_repair_report.py \
+  --runs \
+    Base-OnlineCM=outputs/devfull_base_online_repair_cm/trajectories.jsonl \
+    SFT+DPO-OnlineCM=outputs/devfull_sft_dpo_online_repair_cm/trajectories.jsonl \
+  --output_json outputs/reports/devfull_online_repair_only.json \
+  --output_md outputs/reports/devfull_online_repair_only.md
 ```
 
 For pair quality diagnostics:

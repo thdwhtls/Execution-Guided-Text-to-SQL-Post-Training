@@ -25,7 +25,6 @@ SCHEMA_ERROR_MARKERS = (
     "unknown database",
 )
 
-
 @dataclass
 class ExecutionResult:
     ok: bool
@@ -162,6 +161,49 @@ def execute_sql(conn: sqlite3.Connection, sql: str, timeout_sec: float) -> Execu
         return ExecutionResult(False, [], str(exc), elapsed_ms=elapsed_ms)
     finally:
         conn.set_progress_handler(None, 0)
+
+
+def online_guarded_signals(pred: ExecutionResult, candidate: Optional[Dict[str, Any]] = None) -> List[str]:
+    signals: List[str] = []
+    candidate = candidate or {}
+    flags = candidate.get("cost_flags") or {}
+
+    if not pred.ok:
+        signals.append("executor_error")
+    if pred.ok and len(pred.rows) == 0:
+        signals.append("empty_result")
+    if flags.get("syntax_valid") == 0:
+        signals.append("syntax_guard_failed")
+    if flags.get("schema_valid") == 0:
+        signals.append("schema_guard_failed")
+    if flags.get("executable") == 0:
+        signals.append("not_executable")
+    if flags.get("explain_error"):
+        signals.append("explain_plan_error")
+    if flags.get("cartesian"):
+        signals.append("cartesian_join_risk")
+
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for signal in signals:
+        if signal not in seen:
+            deduped.append(signal)
+            seen.add(signal)
+    return deduped
+
+
+def should_attempt_repair(
+    pred: ExecutionResult,
+    repair_scope: str,
+    candidate: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if repair_scope == "verified":
+        return True
+    if not pred.ok:
+        return True
+    if repair_scope == "online_guarded":
+        return bool(online_guarded_signals(pred, candidate))
+    return False
 
 
 def normalize_cell(value: Any) -> Any:
@@ -702,17 +744,46 @@ def build_feedback(
     selected_tables: Optional[Iterable[str]] = None,
     feedback_detail: str = "basic",
     max_rows: int = 3,
+    online_signals: Optional[Iterable[str]] = None,
 ) -> str:
     include_column_diagnostics = feedback_detail in {"column", "minimal"}
+    online_signal_list = list(online_signals or [])
     details: List[str] = []
     if not pred.ok:
         details.append(f"SQLite error: {pred.error}")
+        if feedback_mode == "online_visible" and online_signal_list:
+            details.append(f"Online-observable signals: {', '.join(online_signal_list)}.")
         if include_column_diagnostics and conn is not None and previous_sql:
             details.extend(build_identifier_diagnostics(conn, previous_sql, pred.error, selected_tables or []))
         return "\n".join(details)
 
     if feedback_mode == "error_only":
         return "The SQL executed, but it did not pass the hidden result check."
+
+    if feedback_mode == "online_visible":
+        if len(pred.rows) == 0:
+            details.append(
+                "The SQL executed without a runtime error, but it returned an empty result. "
+                "Treat this as an online result-sanity warning and revise only if the question implies non-empty output."
+            )
+        if "cartesian_join_risk" in online_signal_list:
+            details.append(
+                "The query plan indicates a Cartesian join risk. Check whether a join condition is missing or an unnecessary table should be removed."
+            )
+        if "explain_plan_error" in online_signal_list:
+            details.append("The SQL could not be analyzed by EXPLAIN QUERY PLAN; simplify the query and keep it valid SQLite.")
+        guard_failures = [
+            signal
+            for signal in online_signal_list
+            if signal in {"syntax_guard_failed", "schema_guard_failed", "not_executable"}
+        ]
+        if guard_failures:
+            details.append(f"Rule-based SQL guard signals: {', '.join(guard_failures)}.")
+        if details:
+            if include_column_diagnostics and conn is not None and previous_sql:
+                details.extend(build_identifier_diagnostics(conn, previous_sql, pred.error, selected_tables or []))
+            return "\n".join(details)
+        return "The SQL executed without an executor-visible error; no online repair feedback is available."
 
     if feedback_mode == "result_status":
         if include_column_diagnostics:
@@ -1022,6 +1093,9 @@ def rollout_example(
             if turn_candidates and turn < args.max_turns:
                 best_for_feedback = sorted(turn_candidates, key=lambda item: item["reward"], reverse=True)[0]
                 pred_result = execute_sql(conn, best_for_feedback["sql"], args.timeout_sec)
+                online_signals = online_guarded_signals(pred_result, best_for_feedback)
+                if not should_attempt_repair(pred_result, args.repair_scope, best_for_feedback):
+                    break
                 feedback = build_feedback(
                     pred_result,
                     gold_result,
@@ -1030,6 +1104,7 @@ def rollout_example(
                     previous_sql=best_for_feedback["sql"],
                     selected_tables=retrieved_tables,
                     feedback_detail=args.feedback_detail,
+                    online_signals=online_signals,
                 )
                 current_prompt = build_repair_prompt(
                     question=question,
@@ -1224,9 +1299,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device_map", default="auto")
     parser.add_argument(
         "--feedback_mode",
-        choices=["error_only", "result_status", "oracle_rows"],
+        choices=["error_only", "result_status", "oracle_rows", "online_visible"],
         default="result_status",
-        help="Repair feedback detail. oracle_rows uses gold result samples and is strongest but less realistic.",
+        help=(
+            "Repair feedback detail. online_visible only exposes executor-visible errors and empty-result "
+            "sanity warnings; oracle_rows uses gold result samples and is strongest but less realistic."
+        ),
+    )
+    parser.add_argument(
+        "--repair_scope",
+        choices=["verified", "online", "online_guarded"],
+        default="verified",
+        help=(
+            "verified repairs every verifier-caught failure; online repairs only executor/runtime failures; "
+            "online_guarded also allows empty-result sanity warnings and conservative rule-guard signals."
+        ),
     )
     parser.add_argument(
         "--feedback_detail",
