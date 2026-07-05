@@ -18,6 +18,7 @@ The main experiments focus on LoRA SFT/DPO, pair-quality filtering, Column-Minim
 - Training data: Spider `train_spider.json`, with `TRAIN_LIMIT=1000` for preference mining.
 - Evaluation data: full Spider dev split, 1034 examples, clean split.
 - Best result: SFT+DPO + Column-Minimal Repair improves Final EX from 68.90% to 73.55% over Base + CM Repair.
+- Online-only constraint: without gold mismatch feedback, SFT+DPO + Online-CM reaches 70.35% Final EX.
 - Main contribution: execution-guided rollout -> preference mining -> LoRA SFT/DPO -> verifier-aware error analysis.
 
 ## Pipeline Overview
@@ -455,7 +456,7 @@ The offline verified-failure setting can use a verifier to detect semantic misma
 
 Run online-only repair with `--repair_scope online_guarded --feedback_mode online_visible`, then summarize the strict online subset with `analysis/online_repair_report.py`.
 
-Online-only results on Spider dev full show that the system still works under this deployment-style constraint. Without gold mismatch feedback, SFT+DPO + Online-CM reaches 70.35% Final EX:
+Online-only results on Spider dev full show that the system still works under this deployment-style constraint. The 73.55% result should be read as the verified-failure upper bound with an external semantic verifier, while 70.35% is the stricter online-visible setting without gold mismatch feedback.
 
 | Run | First-turn EX | Final EX | Repaired | Failed | Online Repair SR |
 | --- | ---: | ---: | ---: | ---: | ---: |
