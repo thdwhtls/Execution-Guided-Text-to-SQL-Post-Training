@@ -18,7 +18,7 @@ The main experiments focus on LoRA SFT/DPO, pair-quality filtering, Column-Minim
 - Training data: Spider `train_spider.json`, with `TRAIN_LIMIT=1000` for preference mining.
 - Evaluation data: full Spider dev split, 1034 examples, clean split.
 - Best result: SFT+DPO + Column-Minimal Repair improves Final EX from 68.90% to 73.55% over Base + CM Repair.
-- Online-only constraint: without gold mismatch feedback, SFT+DPO + Online-CM reaches 70.35% Final EX.
+- Verifier-constrained setting: without gold mismatch feedback, SFT+DPO + Verifier-Constrained CM Repair reaches 70.35% Final EX.
 - Main contribution: execution-guided rollout -> preference mining -> LoRA SFT/DPO -> verifier-aware error analysis.
 
 ## Pipeline Overview
@@ -40,7 +40,7 @@ flowchart TD
 - **Column-Minimal Repair Feedback**: diagnoses invalid columns, alias ownership, candidate owner tables, available schema columns, and asks the model to remove unnecessary joins when a minimal SQL is enough.
 - **Preference Mining for DPO**: mines same-prompt first-turn pairs, same-feedback repair pairs, gold fallback pairs, and synthetic hard negatives from execution-verified rollouts.
 - **DPO Pair Quality Dashboard**: reports reward margin, SQL edit distance, duplicate rate, pair-type distribution, chosen executable rate, and hard-negative ratio before/after filtering.
-- **Verifier-Aware Error Routing**: separates executor-visible errors, guarded errors, and external-verifier semantic errors so online repair and offline verified-failure repair are not mixed together.
+- **Verifier-Aware Error Routing**: separates executor-visible errors, guarded errors, and external-verifier semantic errors so verifier-constrained repair and external-verifier repair are not mixed together.
 - **Error Taxonomy Analysis**: shows the main bottleneck is not schema retrieval recall under top-k=6, but table-column ownership, join reasoning, and result grounding.
 
 ## What Is Implemented
@@ -50,9 +50,9 @@ flowchart TD
 - Baseline one-shot mode via `--max_turns 1`.
 - Multi-turn self-repair rollout: `SQL -> execute -> feedback -> revised SQL`.
 - Repair scope switch:
-  - `--repair_scope verified`: repair every verifier-caught failure; used for offline verified-failure analysis and DPO mining.
-  - `--repair_scope online`: repair only executor-visible failures such as syntax/schema/runtime errors.
-  - `--repair_scope online_guarded`: additionally allow weak online sanity warnings such as empty results, rule-guard failures, and Cartesian join risk.
+  - `--repair_scope verified`: repair every verifier-caught failure; used for external-verifier analysis and DPO mining.
+  - `--repair_scope online`: verifier-constrained repair for executor-visible failures such as syntax/schema/runtime errors.
+  - `--repair_scope online_guarded`: verifier-constrained repair plus guarded signals such as empty results, rule-guard failures, and Cartesian join risk.
 - Repair feedback detail switch:
   - `--feedback_detail basic`: legacy SQLite error/result-status feedback.
   - `--feedback_detail column`: column-aware diagnostics with invalid identifiers, alias/table ownership hints, selected-table columns, and row-count/sample mismatch details.
@@ -375,15 +375,18 @@ Main evaluation uses Qwen2.5-Coder-3B-Instruct with greedy decoding. Preference 
 | SFT+DPO-OneShot | 67.25% | 67.25% | / | 84.45% |
 | SFT+DPO + CM Repair | 67.25% | 73.55% | 19.23% | 84.45% |
 
-SFT and DPO both improve first-turn SQL generation over the base model, while CM Repair adds verified-failure correction on top. SFT+DPO gives the best clean-split result, suggesting that supervised SQL imitation and execution-guided preference optimization are complementary in this setting. DPO rows use the final synthetic-ratio-controlled Synth20 preference set with 701 filtered pairs: 557 natural rollout pairs and 144 synthetic hard negatives.
+SFT and DPO both improve first-turn SQL generation over the base model, while CM Repair adds external-verifier repair on top. SFT+DPO gives the best clean-split result, suggesting that supervised SQL imitation and execution-guided preference optimization are complementary in this setting. DPO rows use the final synthetic-ratio-controlled Synth20 preference set with 701 filtered pairs: 557 natural rollout pairs and 144 synthetic hard negatives.
 
 `Executable` is the percentage of generated SQL candidates that pass SQL parsing, schema checks, and SQLite execution without runtime errors. It measures execution stability, not whether the returned result matches the gold answer.
 
-### Verified-Failure Setting
+### Verifier Settings
 
-This project does not assume that an online system magically knows whether every SQL answer is semantically correct. Instead, it studies the verified-failure setting: after a verifier catches a failed SQL, the model uses execution feedback to repair it, and the verified failure trajectories are converted into preference data.
+This project does not assume that a production system magically knows whether every SQL answer is semantically correct. It separates two settings:
 
-In deployment, the verifier can be a SQL executor for syntax/schema/runtime errors, plus business rules, tests, user feedback, result sanity checks, or an LLM judge for semantic failures. In Spider, gold execution results provide a controlled verifier for measuring repair and mining execution-guided preference pairs.
+- **Verifier-constrained repair**: only uses executor-visible failures and guarded signals such as empty results or rule-guard warnings.
+- **External-verifier repair**: uses an external semantic verifier, such as tests, business rules, user feedback, an LLM judge, or Spider gold execution results.
+
+Spider gold execution results provide a controlled external verifier for measuring repair and mining execution-guided preference pairs. They are not used in the verifier-constrained setting.
 
 ```text
 pred SQL -> verifier/executor -> failure feedback -> repair SQL
@@ -438,32 +441,32 @@ The aligned Synth20 runs show that DPO reduces first-turn errors from 438 to 391
 
 ### Verifier-Aware Routing
 
-Verifier-aware routing separates executor-visible errors from guarded and external-verifier semantic failures. The aligned Synth20 runs show that SFT+DPO reduces both offline semantic failures and online-repairable schema/execution failures.
+Verifier-aware routing separates executor-visible errors from guarded and external-verifier semantic failures. The aligned Synth20 runs show that SFT+DPO reduces both external-verifier semantic failures and verifier-constrained schema/execution failures.
 
 | Deployment Scope | Base-CM | DPO-CM | SFT+DPO-CM |
 | --- | ---: | ---: | ---: |
-| online repair | 171 | 155 | 117 |
+| verifier-constrained repair | 171 | 155 | 117 |
 | guarded repair | 44 | 39 | 32 |
-| offline or external-verifier repair | 223 | 197 | 189 |
+| external-verifier repair | 223 | 197 | 189 |
 
-### Online-Repair-Only Evaluation
+### Verifier-Constrained Evaluation
 
-The offline verified-failure setting can use a verifier to detect semantic mismatches, but a normal online system only sees executor-visible failures and weak result sanity warnings. For this reason, the code also supports an online-only evaluation mode:
+The external-verifier setting can detect semantic mismatches, but a verifier-constrained system only sees executor-visible failures and weak result sanity warnings. For this reason, the code also supports a verifier-constrained evaluation mode:
 
 - allowed feedback: SQL syntax/runtime errors, `no such table`, `no such column`, ambiguous columns, timeout or permission errors.
 - guarded feedback: empty-result sanity warning, rule-guard failures, and Cartesian join risk from `EXPLAIN QUERY PLAN`.
 - disallowed feedback: gold SQL, gold execution rows, expected row count, or "your result differs from gold".
 
-Run online-only repair with `--repair_scope online_guarded --feedback_mode online_visible`, then summarize the strict online subset with `analysis/online_repair_report.py`.
+Run verifier-constrained repair with `--repair_scope online_guarded --feedback_mode online_visible`, then summarize the strict verifier-constrained subset with `analysis/online_repair_report.py`.
 
-Online-only results on Spider dev full show that the system still works under this deployment-style constraint. The 73.55% result should be read as the verified-failure upper bound with an external semantic verifier, while 70.35% is the stricter online-visible setting without gold mismatch feedback.
+Verifier-constrained results on Spider dev full show that the system still works under this deployment-style constraint. The 73.55% result should be read as the external-verifier upper bound, while 70.35% is the stricter verifier-constrained setting without gold mismatch feedback.
 
-| Run | First-turn EX | Final EX | Repaired | Failed | Online Repair SR |
+| Run | First-turn EX | Final EX | Repaired | Failed | Verifier-Constrained Repair SR |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Base Online-CM | 57.56% | 63.18% | 58 | 380 | 13.24% |
-| SFT+DPO Online-CM | 67.25% | 70.35% | 32 | 306 | 9.47% |
+| Base Verifier-Constrained CM | 57.56% | 63.18% | 58 | 380 | 13.24% |
+| SFT+DPO Verifier-Constrained CM | 67.25% | 70.35% | 32 | 306 | 9.47% |
 
-The lower repair success rate after SFT+DPO is expected: the model makes fewer first-turn errors, so the online-repairable pool becomes smaller. The main online gain comes from better first-turn SQL plus a smaller amount of executor-visible / guarded repair.
+The lower repair success rate after SFT+DPO is expected: the model makes fewer first-turn errors, so the verifier-constrained repair pool becomes smaller. The main verifier-constrained gain comes from better first-turn SQL plus a smaller amount of executor-visible / guarded repair.
 
 ### Synthetic Ratio Ablation
 
@@ -586,7 +589,7 @@ python3 analysis/repair_routing_report.py \
   --output_md outputs/reports/devfull_synth20_repair_routing.md
 ```
 
-For online-repair-only evaluation, rerun repair with online-visible feedback only:
+For verifier-constrained evaluation, rerun repair with executor-visible and guarded feedback only. The code path uses the implementation flag names `online_visible` and `online_guarded`:
 
 ```bash
 python3 text2sql_trajectory_builder.py \
@@ -622,8 +625,8 @@ python3 text2sql_trajectory_builder.py \
 
 python3 analysis/online_repair_report.py \
   --runs \
-    Base-OnlineCM=outputs/devfull_base_online_repair_cm/trajectories.jsonl \
-    SFT+DPO-OnlineCM=outputs/devfull_sft_dpo_online_repair_cm/trajectories.jsonl \
+    Base-VerifierConstrainedCM=outputs/devfull_base_online_repair_cm/trajectories.jsonl \
+    SFT+DPO-VerifierConstrainedCM=outputs/devfull_sft_dpo_online_repair_cm/trajectories.jsonl \
   --output_json outputs/reports/devfull_online_repair_only.json \
   --output_md outputs/reports/devfull_online_repair_only.md
 ```
